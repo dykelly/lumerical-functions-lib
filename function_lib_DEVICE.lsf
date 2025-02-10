@@ -1,0 +1,100 @@
+#############################################################################
+# Function library for DEVICE
+# Author: Daniel Kelly
+#############################################################################
+
+function_lib_general;
+# FOR REFERENCE FROM DOCUMENTATION
+ #feem_struct = {
+    #"E": rawFeemFields.E,
+    #"H": rawFeemFields.H,
+    #"order": rawFeemMesh.order,
+    #"connectivity": rawFeemMesh.connectivity,
+    #"vertices": rawFeemMesh.vertices,
+    #"normal vector": [0,0,1]
+    #"DoFt": rawFeemFields.DoFt,
+    #“DoFz": rawFeemFields.DoFz,
+    #"kz": modeproperties.kz,
+    #};
+  
+function bestoverlap_feem(ref_mode_data) {
+    # Finds the mode with best overlap with a reference mode among the modes found by FEEM
+    # Reference should be a struct of datasets which are the result of a FEEM solver. 
+    # Returns the number of the mode with the best overlap and the overlap 
+    assert("Reference mode data has > 1 mode present", ref_mode_data.n_modes==1);
+    rawFeemFields = getresult("FEEM", "rawFeemFields");   
+    rawFeemMesh = getresult("FEEM", "rawFeemMesh");    
+    modeproperties = getresult("FEEM", "modeproperties");    
+    
+    solver_data = olapstruct();
+    #solver_data = {
+        #"E": rawFeemFields.E,
+        #"H": rawFeemFields.H,
+        #"order": rawFeemMesh.order,
+        #"connectivity": rawFeemMesh.connectivity,
+        #"vertices": rawFeemMesh.vertices,
+        #"normal vector": [0,0,1],
+        #"DoFt": rawFeemFields.DoFt,
+        #"DoFz": rawFeemFields.DoFz,
+        #"kz": modeproperties.kz
+    #};    
+
+    ?"Calculating overlap data";
+    overlaps = modeoverlap(solver_data, ref_mode_data);
+    ?"Overlaps calculated";    
+    overlaps_sorted = sort(overlaps, false); # sort by desc
+    mode_n = arg_max(overlaps_sorted); # find mode number with largest overlap
+    best_olap = overlaps(mode_n);
+    return {"bestmode_n": mode_n, "best_olap" : best_olap, "all_olaps" : overlaps};
+}
+
+function olapstruct() {
+    # creates a struct for the modeoverlap() function from the FEEM solver data
+    rawFeemFields = getresult("FEEM", "rawFeemFields");   
+    rawFeemMesh = getresult("FEEM", "rawFeemMesh");    
+    modeproperties = getresult("FEEM", "modeproperties");    
+    
+    n_modes = size(modeproperties.modenumber);
+    n_modes = n_modes(1);
+    solver_data = {
+        "E": rawFeemFields.E,
+        "H": rawFeemFields.H,
+        "order": rawFeemMesh.order,
+        "connectivity": rawFeemMesh.connectivity,
+        "vertices": rawFeemMesh.vertices,
+        "normal vector": [0,0,1],
+        "DoFt": rawFeemFields.DoFt,
+        "DoFz": rawFeemFields.DoFz,
+        "kz": modeproperties.kz,
+        "n_modes": n_modes
+    };    
+    return solver_data;
+}
+
+function olapstruct_singlemode(mode_n) {
+    # EXPERIMENTAL FUNCTION, NEEDS MORE TESTING!
+    # creates a struct for the moveoverlap() function from the FEEM solver data, extracting
+    # only one mode.
+    rawFeemFields = getresult("FEEM", "rawFeemFields");   
+    rawFeemMesh = getresult("FEEM", "rawFeemMesh");    
+    modeproperties = getresult("FEEM", "modeproperties");    
+    
+    n_modes = size(modeproperties.modenumber);
+    n_modes = n_modes(1);
+    solver_data = {
+        "E": rawFeemFields.E(:,mode_n,:,:),
+        "H": rawFeemFields.H(:,mode_n,:,:),
+        "order": rawFeemMesh.order,
+        "connectivity": rawFeemMesh.connectivity,
+        "vertices": rawFeemMesh.vertices,
+        "normal vector": [0,0,1],
+        "DoFt": rawFeemFields.DoFt(:,mode_n,:),
+        "DoFz": rawFeemFields.DoFz(:,mode_n,:),
+        "kz": modeproperties.kz(mode_n,:),
+        "n_modes": 1
+    };    
+    return solver_data;
+}
+
+
+

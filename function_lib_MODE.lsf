@@ -1,0 +1,244 @@
+#############################################################################
+# Function library for MODE
+# Author: Daniel Kelly
+
+#############################################################################
+function_lib_general;
+
+
+function nummodesFDE() {
+    # Substitute for in-build nummodes() function. 
+    # However, this gets the number of modes even if Eigensolver Analysis hasn't been run, but FDE has data.
+    # Surprisingly nummodes doesn't work in this case (gives 0 as of 2023);    
+    # For example, when file re-opened after closing, or when using python api
+    n_modes = 0;
+    i = 1;
+    #mode_exists = haveresult("FDE::data::mode" + num2str(i));
+    mode_exists=1;
+    for(0; mode_exists==1; 0) {
+        mode_exists = haveresult("FDE::data::mode" + num2str(i));
+        if (mode_exists==1) {n_modes = n_modes + 1;}
+        i = i + 1;     
+    }
+    return n_modes;
+}
+
+
+function getmodeproperties() {
+    # Collects properties of all found modes into one struct, each parameter is a matrix
+    # of size n_modes
+    
+    # Example usage: 
+    # modeprops = getmodeproperties();
+    # neffs = modeprops.neff;
+    # ngs = modeprops.ng;
+    
+    #mode_props = matrixdataset("mode_properties");
+    n_modes = nummodesFDE();
+    neff=matrix(n_modes);
+    ng=matrix(n_modes);
+    loss=matrix(n_modes);
+    Aeff=matrix(n_modes);
+    TE_fract=matrix(n_modes);
+    #E_field=cell(n_modes);
+    
+
+    
+    for (i=1:n_modes) {        
+        neff(i) = getdata('FDE::data::mode'+ num2str(i),'neff');
+        ng(i)=getdata('FDE::data::mode'+ num2str(i),'ng');        
+        loss(i)=getdata('FDE::data::mode'+ num2str(i),'loss');
+        Aeff(i) = getdata('FDE::data::mode'+ num2str(i),'mode effective area');
+        TE_fract(i) = getdata('FDE::data::mode'+ num2str(i),'TE polarization fraction');
+        #E_field{i} = getresult('FDE::data::mode'+ num2str(i),'E');
+
+    }
+        return {"neff" : neff, "ng": ng, "loss": loss, "TE_fract" : TE_fract, "Aeff" : Aeff};
+}
+
+function getclosestmodeprops(refmode_name) {
+    closest_mode = bestoverlap2(refmode_name);
+    neff = getdata(refmode_name,'neff');
+    ng=getdata(refmode_name,'ng');        
+    loss=getdata(refmode_name,'loss');
+    TE_fract = getdata('FDE::data::mode'+ num2str(i),'TE polarization fraction');
+    Aeff = getdata(refmode_name,'mode effective area');
+    return {"neff" : neff, "ng": ng, "loss": loss, "TE_fract" : TE_fract, "Aeff" : Aeff};
+}
+
+    
+function integratexy(data, x0, x1, y0, y1) {
+    #NOT IMPLEMENTED YET
+    # data = getresult("FDE::data::mode1","P"), or replace P by E / H
+    # returns 0.5 |F|^2 for a field F for a single z value and wavelength. 
+    xmin_idx = find(data.x, x0);   
+    xmax_idx = find(data.x, x1);
+    ymin_idx = find(data.y, y0);
+    ymax_idx = find(data.y, y1);
+    x = data.x(xmin_idx:xmax_idx);
+    y = data.y(ymin_idx:ymax_idx);
+    # find mod squared of data
+    
+    # the line below extracts the attribute of the dataset regardless of if it's E, H or P
+    eval("F = data." + getattribute(data) + ";");
+    #remove z and lambda singleton dimensions. The result is of dimension (nx, ny, 3) 
+    F = pinch(F(:,:,1,1,:));
+    # find |F2|^2
+    F2 = [dot(F(:,:,1),F(:,:,1)),dot(F(:,:,2),F(:,:,2)),dot(F(:,:,3),F(:,:,3))];
+    # THIS CODE ABOVE ISN't RIGHT, CHECK SLICING
+    # slice along the [x0, x1], [y0, y1] bounds
+    F2 = F2(xmin_idx:xmax_idx, ymin_idx:ymax_idx, 1);
+    
+    #REALISED the above code can be done by getelectric() and getmagnetic() , at least in FDE
+    
+    res = integrate(0.5*F2, 1:2, x, y);
+    return res;
+    
+}
+
+# Note: In FDE, the mode electric intensity is normalized with maximum value of 1, eg max(abs(E)^2=1;
+# (taken from ANSYS website)
+
+function integrate_E(mode_n, x0, x1, y0, y1) {
+    
+    x_raw = getdata("mode" + num2str(mode_n), "x");
+    y_raw = getdata("mode" + num2str(mode_n), "y");
+    xmin_idx = find(x_raw, x0);   
+    xmax_idx = find(x_raw, x1);
+    ymin_idx = find(y_raw, y0);
+    ymax_idx = find(y_raw, y1);
+    x = x_raw(xmin_idx:xmax_idx);
+    y = y_raw(ymin_idx:ymax_idx);
+
+    data = getelectric("mode" + num2str(mode_n));
+    #remove singleton z and lambda dimension. data becomes a 2D matrix 
+    data = pinch(data(:,:,1,1));    
+    
+    data = data(xmin_idx:xmax_idx, ymin_idx:ymax_idx);
+    
+    res = integrate(0.5*data, 1:2, x, y);
+    return res;
+    
+}
+
+function integrate_E_obj(mode_n, ob) {
+    #returns the integral of the E field (0.5*|E|^2) in the area 
+    #of the bounding rectangle of an object in the xy plane
+    x0 = getnamed(ob, "x min");
+    x1 = getnamed(ob, "x max");
+    y0 = getnamed(ob, "y min");
+    y1 = getnamed(ob, "y max");
+    intgl = integrate_E(mode_n, x0, x1, y0, y1);
+    return intgl;
+}
+
+function integrate_E_allobjs(mode_n, obj_group, asfractions) {
+    # Integrates E field of a mode over the xy rectangles of all objects
+    # on one level of geometry. E.g. if obj_group='::model::' 
+    # then it's all 1st level geometry objects. 
+    # If '::model::structure group::' is typed, then it's all objects
+    # in the root of the structure group. Note the double colon on either side. 
+    #
+    # If asfractions==true, then returns values as a fraction of the total FDE solver
+    # E field for this mode, otherwise returns the absolute value of the integral from solver. 
+    # Doesn't seem to work if objects are disabled. 
+    #   P.S. ((The code could be adapted to take all objects inside groups recursively too,
+    #        because group names have :: at the end but objects don't ))
+    intgl_struct = struct;
+    obj_list = getobjectlist(obj_group);
+    obj_list;
+    # Loop over all geometry objects (rectangles)
+    for (ob=obj_list) {
+                
+        intgl_ob = integrate_E_obj(mode_n, ob);
+        if (asfractions==true) {
+            intgl_total = integrate_E_obj(mode_n, "FDE");
+            intgl_ob = intgl_ob/intgl_total;
+        }
+        #remove name prefix ::model::... etc.        
+        ob_name_stripped = splitstring(ob,"::");
+        ob_name_stripped = ob_name_stripped{length(ob_name_stripped)};
+        intgl_struct = setfield(intgl_struct, ob_name_stripped, intgl_ob);
+    }
+    return intgl_struct;
+}
+
+function plotmodeEx(mode_n, save_plot, save_name) {
+    
+    E = getresult("FDE::data::mode" + num2str(mode_n), "E");
+    image(E.x, E.y, E.Ex, "x", "y");  
+    #setplot("x min", );
+    #setplot("x max", );
+    #setplot("y min", );
+    #setplot("y max", );
+    
+    if (save_plot==1) {exportfigure(save_name+"-Ex.png");}
+    closeall;
+}
+function plotmodeE2(mode_n, save_plot, save_name) {
+    E = getresult("FDE::data::mode" + num2str(mode_n), "E");
+    image(E.x, E.y, E.E2, "x", "y");  
+    if (save_plot==1) {exportfigure(save_name+"-E2.png");}
+    closeall;
+}
+
+function E_modal(mode_nums) {
+    # NOT IMPLEMENTED YET
+    # creates one dataset which contains E vs xyz,f and also n_mode.
+    # Effectively combines several modes into one dataset specified by mode numbers
+    # mostly just for visualisation via the Lumerical interface
+    for (n_mode=mode_nums) {
+        E = getresult("FDE::data::mode" + num2str(n_mode), "E");
+    }
+    
+}
+
+
+function all_overlaps(ref_mode) {
+    # Get matrix of all overlaps of FDE modes with the dcard = ref_mode, as ordered by the system
+    # (i.e. in order of decreasing neff, as far as I know.
+    # This is named analagous to the 'bestoverlap' command. 
+    n_modes = nummodesFDE(); 
+    overlaps = matrix(n_modes) ;  
+    for (i=(1:n_modes)) {
+        oo = overlap("mode" + num2str(i), ref_mode);
+        overlap_intgl = oo(1); # second term is power coupling
+        overlaps(i) = overlap_intgl;
+    }
+    return overlaps;
+}
+
+function all_mode_overlaps(mode_n, other_modes) {
+    # Get matrix of all overlaps of a given mode (either a mode found by FDE, or a dcard mode)
+    # with all other modes named in the 'other_modes' cell.
+    n_modes = length(other_modes);
+    overlaps = matrix(n_modes);  
+    for (i=(1:n_modes)) {
+        oo = overlap("mode"+num2str(mode_n), other_modes{i});
+        overlap_intgl = oo(1); # second term is power coupling
+        overlaps(i) = overlap_intgl;
+    }
+    return overlaps;
+ 
+    
+}
+
+
+#n_modes = nummodes();
+#field_fractions = zeros(n_modes); # fraction of the field contained in the area
+    #for (i=1:n_modes) {
+        #intgl = integrate_el_obj(i, "CHPW::ITO layer");
+        #total_e = integrate_el_obj(i, "FDE");
+        #field_fraction = intgl/total_e;
+        #field_fractions(i) = field_fraction;
+        #?"Mode n " + num2str(i) + " has integral in ITO layer:\t" + num2str(intgl);
+        #?"The total E field integral is:\t" + num2str(total_e);
+        #?"Area fraction:\t" + num2str(field_fraction);
+        #?"";
+    #}
+#idces_sorted = sortmap(field_fractions, 0);
+#for (i=idces_sorted) {
+    #?"Mode " + num2str(i) + " with field fraction:\t" + num2str(field_fractions(i),"%e");
+#}
+
+?"Mode function lib has been imported.";
